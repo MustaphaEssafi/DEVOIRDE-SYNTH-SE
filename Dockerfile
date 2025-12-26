@@ -1,7 +1,7 @@
-
-FROM python:3.8
+FROM python:3.11-slim
 WORKDIR /app
 COPY api/ .
-RUN pip install flask bcrypt
+RUN pip install --no-cache-dir flask bcrypt
+USER nobody
 EXPOSE 5000
-CMD [&quot;python&quot;, &quot;app.py&quot;]
+CMD ["python", "app.py"]

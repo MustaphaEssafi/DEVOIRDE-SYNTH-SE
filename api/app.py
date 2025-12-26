@@ -1,66 +1,112 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import sqlite3
-import pickle
-import subprocess
-import hashlib
+import bcrypt
 import os
+import json
 import logging
-app = Flask(__name__)
-# SECRET HARDCODÉ (mauvaise pratique)
-API_KEY = &quot;API-KEY-123456&quot;
-# Logging non sécurisé
-logging.basicConfig(level=logging.DEBUG)
-@app.route(&quot;/auth&quot;, methods=[&quot;POST&quot;])
-def auth():
-username = request.json.get(&quot;username&quot;)
-password = request.json.get(&quot;password&quot;)
-# SQL Injection
-conn = sqlite3.connect(&quot;users.db&quot;)
-cursor = conn.cursor()
-query = f&quot;SELECT * FROM users WHERE username=&#39;{username}&#39; AND
-password=&#39;{password}&#39;&quot;
-cursor.execute(query)
-if cursor.fetchone():
-return {&quot;status&quot;: &quot;authenticated&quot;}
-return {&quot;status&quot;: &quot;denied&quot;}
-@app.route(&quot;/exec&quot;, methods=[&quot;POST&quot;])
-def exec_cmd():
-cmd = request.json.get(&quot;cmd&quot;)
-# Command Injection
-output = subprocess.check_output(cmd, shell=True)
-return {&quot;output&quot;: output.decode()}
-@app.route(&quot;/deserialize&quot;, methods=[&quot;POST&quot;])
-def deserialize():
-data = request.data
-# Désérialisation dangereuse
-obj = pickle.loads(data)
-return {&quot;object&quot;: str(obj)}
-@app.route(&quot;/encrypt&quot;, methods=[&quot;POST&quot;])
-def encrypt():
-text = request.json.get(&quot;text&quot;, &quot;&quot;)
-# Chiffrement faible
-hashed = hashlib.md5(text.encode()).hexdigest()
-return {&quot;hash&quot;: hashed}
-@app.route(&quot;/file&quot;, methods=[&quot;POST&quot;])
-def read_file():
-filename = request.json.get(&quot;filename&quot;)
-# Path Traversal
-with open(filename, &quot;r&quot;) as f:
-return {&quot;content&quot;: f.read()}
 
-@app.route(&quot;/debug&quot;, methods=[&quot;GET&quot;])
+app = Flask(__name__)
+
+# Chargement du secret depuis une variable d’environnement (pas hardcodé)
+API_KEY = os.environ.get("API_KEY", "default-key")
+
+# Configuration du logging sécurisé
+logging.basicConfig(filename='app.log', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+# --- Authentification sécurisée (prévention SQL Injection) ---
+@app.route("/auth", methods=["POST"])
+def auth():
+    try:
+        username = request.json.get("username")
+        password = request.json.get("password")
+
+        if not username or not password:
+            return jsonify({"error": "Missing credentials"}), 400
+
+        conn = sqlite3.connect("users.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT password FROM users WHERE username=?", (username,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if row and bcrypt.checkpw(password.encode(), row[0].encode()):
+            return jsonify({"status": "authenticated"}), 200
+        return jsonify({"status": "denied"}), 401
+    except Exception as e:
+        logging.error(f"Error in auth: {e}")
+        return jsonify({"error": "Server error"}), 500
+
+
+# --- Suppression de l’exécution de commandes arbitraires ---
+@app.route("/exec", methods=["POST"])
+def exec_cmd():
+    return jsonify({"error": "Command execution disabled for security reasons"}), 403
+
+
+# --- Désérialisation sécurisée via JSON ---
+@app.route("/deserialize", methods=["POST"])
+def deserialize():
+    try:
+        data = json.loads(request.data)
+        return jsonify({"object": data}), 200
+    except Exception as e:
+        logging.warning(f"Invalid JSON data: {e}")
+        return jsonify({"error": "Invalid data"}), 400
+
+
+# --- Chiffrement fort (bcrypt) ---
+@app.route("/encrypt", methods=["POST"])
+def encrypt():
+    text = request.json.get("text", "")
+    if not text:
+        return jsonify({"error": "Text is required"}), 400
+    hashed = bcrypt.hashpw(text.encode(), bcrypt.gensalt())
+    return jsonify({"hash": hashed.decode()}), 200
+
+
+# --- Lecture sécurisée de fichier (anti Path Traversal) ---
+@app.route("/file", methods=["POST"])
+def read_file():
+    try:
+        filename = request.json.get("filename")
+        if not filename:
+            return jsonify({"error": "Filename is required"}), 400
+
+        base_path = "/app/files/"
+        os.makedirs(base_path, exist_ok=True)
+        safe_path = os.path.join(base_path, os.path.basename(filename))
+
+        if not os.path.exists(safe_path):
+            return jsonify({"error": "File not found"}), 404
+
+        with open(safe_path, "r") as f:
+            content = f.read()
+        return jsonify({"content": content}), 200
+    except Exception as e:
+        logging.error(f"File read error: {e}")
+        return jsonify({"error": "Unable to read file"}), 500
+
+
+# --- Debug endpoint désactivé ---
+@app.route("/debug", methods=["GET"])
 def debug():
-# Divulgation d&#39;informations sensibles
-return {
-&quot;api_key&quot;: API_KEY,
-&quot;env&quot;: dict(os.environ),
-&quot;cwd&quot;: os.getcwd()
-}
-@app.route(&quot;/log&quot;, methods=[&quot;POST&quot;])
+    return jsonify({"error": "Access forbidden"}), 403
+
+
+# --- Logging sécurisé ---
+@app.route("/log", methods=["POST"])
 def log_data():
-data = request.json
-# Log Injection
-logging.info(f&quot;User input: {data}&quot;)
-return {&quot;status&quot;: &quot;logged&quot;}
-if __name__ == &quot;__main__&quot;:
-app.run(host=&quot;0.0.0.0&quot;, port=5000, debug=True)
+    try:
+        data = request.json
+        logging.info("User input safely logged: %s", json.dumps(data))
+        return jsonify({"status": "logged"}), 200
+    except Exception as e:
+        logging.error(f"Logging error: {e}")
+        return jsonify({"error": "Invalid log input"}), 400
+
+
+# --- Exécution principale sécurisée ---
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)
