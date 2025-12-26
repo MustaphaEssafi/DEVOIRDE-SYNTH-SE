@@ -1,14 +1,59 @@
-- name: SAST Analysis (Bandit)
-  run: |
-    pip install bandit
-    bandit -r api/ -f json -o bandit-report.json || true
-    echo "===== BANDIT REPORT ====="
-    cat bandit-report.json
-  continue-on-error: true
-- name: Python Security Scan (Safety)
-  run: |
-    pip install safety
-    safety check -r requirements.txt --json > safety-report.json || true
-    echo "===== SAFETY REPORT ====="
-    cat safety-report.json
-  continue-on-error: true
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    # --- Analyse SAST ---
+    - name: SAST Analysis (Bandit)
+      run: |
+        pip install bandit
+        bandit -r api/ -f json -o bandit-report.json || true
+        echo "===== BANDIT REPORT ====="
+        cat bandit-report.json
+      continue-on-error: true
+
+    # --- Analyse des dépendances Python ---
+    - name: Python Security Scan (Safety)
+      run: |
+        pip install safety
+        safety check -r requirements.txt --json > safety-report.json || true
+        echo "===== SAFETY REPORT ====="
+        cat safety-report.json
+      continue-on-error: true
+
+    # --- Build Docker Image ---
+    - name: Docker build
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        push: false
+        tags: devsecops-assignment:latest
+
+    # --- Scan Docker Image avec Trivy ---
+    - name: Trivy Scan Docker Image
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: devsecops-assignment:latest
+        severity: CRITICAL,HIGH
+        format: table
+        exit-code: '1'
+        ignore-unfixed: true
