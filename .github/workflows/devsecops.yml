@@ -5,3 +5,10 @@
     echo "===== BANDIT REPORT ====="
     cat bandit-report.json
   continue-on-error: true
+- name: Python Security Scan (Safety)
+  run: |
+    pip install safety
+    safety check -r requirements.txt --json > safety-report.json || true
+    echo "===== SAFETY REPORT ====="
+    cat safety-report.json
+  continue-on-error: true
